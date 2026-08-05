@@ -45,7 +45,7 @@ def main():
     try:
         _ = pd.read_csv(OUTPUT_CSV)
     except FileNotFoundError:
-        df_empty = pd.DataFrame(columns=["timestamp", "symbol", "price", "source"])
+        df_empty = pd.DataFrame(columns=["timestamp", "Stock_Name", "price", "source"])
         df_empty.to_csv(OUTPUT_CSV, index=False)
 
     while True:
@@ -56,7 +56,7 @@ def main():
             quote = get_yahoo_quote()
             row = {
                 "timestamp": ts,
-                "symbol": quote["symbol"],
+                "Stock_Name": quote["symbol"],
                 "price": quote["price"],
                 "source": quote["source"],
             }
