@@ -5,8 +5,8 @@ import pandas as pd
 
 # ---------- CONFIG ----------
 OUTPUT_CSV = "stock_minute_data.csv"
-INTERVAL_SECONDS = 6  # 1 minute
-STOCK_SYMBOL = "Redington.NS"  # Use Yahoo Finance symbol: NSE = .NS, BSE = .BO
+INTERVAL_SECONDS = 60  # 1 minute
+STOCK_SYMBOL = "tcs.NS"  # Use Yahoo Finance symbol: NSE = .NS, BSE = .BO
 # ---------------------------
 
 
