@@ -1,22 +1,3 @@
-"""
-NSE Stock List Tracker
------------------------
-Fetches the official, up-to-date list of all equities listed on NSE
-(National Stock Exchange, India) and detects newly added stocks
-(e.g. from recent IPOs) compared to the previous run.
-
-Data source: NSE's own official CSV feed (not HTML scraping).
-This is the same file NSE publishes for its "Equity List" download.
-
-Usage:
-    python nse_stock_tracker.py
-
-Output:
-    - nse_equity_list_YYYY-MM-DD.csv   -> full current list, snapshot for today
-    - new_stocks_YYYY-MM-DD.csv        -> only the newly added symbols (if any)
-    - Prints a summary to the console
-"""
-
 import requests
 import pandas as pd
 import os
@@ -133,3 +114,27 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+"""
+NSE Stock List Tracker
+-----------------------
+Fetches the official, up-to-date list of all equities listed on NSE
+(National Stock Exchange, India) and detects newly added stocks
+(e.g. from recent IPOs) compared to the previous run.
+
+Data source: NSE's own official CSV feed (not HTML scraping).
+This is the same file NSE publishes for its "Equity List" download.
+
+Usage:
+    python nse_stock_tracker.py
+
+Output:
+    - nse_equity_list_YYYY-MM-DD.csv   -> full current list, snapshot for today
+    - new_stocks_YYYY-MM-DD.csv        -> only the newly added symbols (if any)
+    - Prints a summary to the console
+"""
