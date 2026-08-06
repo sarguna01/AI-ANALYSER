@@ -19,6 +19,11 @@ import random
 import io
 from datetime import datetime
 
+try:
+    import yfinance as yf
+except ImportError:
+    yf = None
+
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
@@ -42,6 +47,11 @@ MIN_PE            = 1        # Min PE ratio (avoid negative/zero)
 TOP_PICKS_COUNT   = 20       # How many top stocks to show
 MAX_SCORE         = 100      # Maximum possible score
 
+# Real-time price refresh
+USE_YAHOO_REALTIME = True    # Refresh live prices from Yahoo Finance for NSE symbols
+YAHOO_UPDATE_LIMIT = 200     # Maximum symbols to refresh from Yahoo Finance
+YAHOO_SUFFIX       = ".NS"   # NSE ticker suffix for Yahoo Finance
+
 # ─────────────────────────────────────────────
 # SESSION
 # ─────────────────────────────────────────────
@@ -55,6 +65,100 @@ def create_session():
     except Exception as e:
         print(f"  ⚠️  Session error: {e}")
         return None
+
+
+def get_yahoo_quote(symbol):
+    """Fetch the latest stock quote from Yahoo Finance via yfinance."""
+    if yf is None:
+        raise ImportError("yfinance is not installed. Install it with `pip install yfinance`.")
+
+    ticker = yf.Ticker(symbol)
+    price = None
+    prev_close = None
+    open_price = None
+    high52 = 0
+    low52 = 0
+
+    try:
+        history = ticker.history(period="2d", interval="1d")
+        if not history.empty:
+            last_row = history.iloc[-1]
+            price = float(last_row.get("Close", float("nan")))
+            open_price = float(last_row.get("Open", float("nan")))
+            if len(history) > 1:
+                prev_close = float(history["Close"].iloc[-2])
+    except Exception:
+        pass
+
+    info = {}
+    try:
+        info = ticker.info
+    except Exception:
+        info = {}
+
+    if price is None or price != price:  # check for NaN
+        price = info.get("regularMarketPrice") or info.get("currentPrice")
+    if prev_close is None:
+        prev_close = info.get("regularMarketPreviousClose") or info.get("previousClose")
+    if open_price is None or open_price != open_price:
+        open_price = info.get("open")
+
+    high52 = info.get("fiftyTwoWeekHigh") or info.get("52WeekHigh") or high52
+    low52 = info.get("fiftyTwoWeekLow") or info.get("52WeekLow") or low52
+
+    if price is None:
+        raise ValueError(f"No quote returned for {symbol}")
+
+    if prev_close in [None, 0]:
+        prev_close = price
+
+    change_pct = ((price - prev_close) / prev_close * 100) if prev_close else 0
+
+    return {
+        "symbol": symbol,
+        "price": float(price),
+        "prev": float(prev_close),
+        "open": float(open_price) if open_price not in [None, float("nan")] else float(price),
+        "change": round(float(change_pct), 2),
+        "source": "yahoo_finance",
+        "high52": float(high52) if high52 else 0,
+        "low52": float(low52) if low52 else 0,
+    }
+
+
+def refresh_prices_from_yahoo(all_stocks, max_symbols=None):
+    """Refresh live price-related fields for NSE symbols using Yahoo Finance."""
+    if yf is None:
+        print("  ⚠️  yfinance not installed; real-time refresh skipped.")
+        return all_stocks
+
+    max_symbols = max_symbols or len(all_stocks)
+    print(f"  ⏳ Refreshing live prices from Yahoo Finance for up to {max_symbols} symbols...")
+
+    refreshed = 0
+    for idx, (sym, data) in enumerate(list(all_stocks.items())):
+        if idx >= max_symbols:
+            break
+
+        yahoo_symbol = f"{sym}{YAHOO_SUFFIX}"
+        try:
+            quote = get_yahoo_quote(yahoo_symbol)
+            data["price"] = quote["price"]
+            data["change"] = quote["change"]
+            data["open"] = quote["open"]
+            data["prev"] = quote["prev"]
+            if quote["high52"] > 0:
+                data["52h"] = quote["high52"]
+            if quote["low52"] > 0:
+                data["52l"] = quote["low52"]
+            data["source"] = quote["source"]
+            refreshed += 1
+        except Exception as e:
+            print(f"    ⚠️  Yahoo refresh failed for {sym}: {e}")
+        time.sleep(0.1)
+
+    print(f"  ✅ Refreshed {refreshed}/{min(len(all_stocks), max_symbols)} symbols from Yahoo Finance.")
+    return all_stocks
 
 # ─────────────────────────────────────────────
 # STAGE 1: FETCH ALL STOCK SYMBOLS
@@ -511,6 +615,11 @@ def main():
             if len(all_stocks) < 10:
                 print("  ⚠️  Too few stocks fetched. Switching to demo...")
                 choice = "2"
+            elif USE_YAHOO_REALTIME:
+                all_stocks = refresh_prices_from_yahoo(
+                    all_stocks,
+                    max_symbols=YAHOO_UPDATE_LIMIT
+                )
 
     if choice == "2":
         # ── DEMO MODE — Generate realistic 500+ stock data ──
