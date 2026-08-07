@@ -1,153 +1,121 @@
 """
-Multi-Day Stock Momentum Comparator
---------------------------------------
-Takes multiple daily CSV files (each with SYMBOL, CLOSE, PREV_CLOSE, PCT_CHANGE)
-and finds stocks that show CONSECUTIVE positive % change across days
-(Day1 -> Day2 -> Day3 -> ...).
-
-This helps spot momentum stocks that keep moving up day after day,
-rather than a one-off spike.
-
-FOLDER SETUP:
-Put your daily CSVs in a folder, named so they sort in date order, e.g.:
-    daily_csvs/2026-08-04.csv
-    daily_csvs/2026-08-05.csv
-    daily_csvs/2026-08-06.csv
-
-Each CSV must have these columns (matches your bhavcopy script output):
-    SYMBOL,CLOSE,PREV_CLOSE,PCT_CHANGE
+Two-day bhavcopy comparison tool.
+--------------------------------
+Compares two daily percentage-change files from bhavcopy_data and creates a
+side-by-side view of how each stock moved between the two days.
 
 Usage:
-    python momentum_comparator.py daily_csvs/
+    python csv_comparetor.py
+    python csv_comparetor.py <day1.csv> <day2.csv>
 
 Output:
-    - consecutive_gainers.csv  -> stocks that gained EVERY single day across all files
-    - streak_summary.csv       -> for every stock, how many consecutive up-days (as of the last file)
-    - Console printout of both, sorted by strongest momentum
+    - two_day_comparison.csv
 """
 
-import pandas as pd
+import glob
 import os
+
+import pandas as pd
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CSV_PATHS = [
-    os.path.join(BASE_DIR, "bhavcopy_data", "full_pct_change_2026-08-06.csv"),
-    os.path.join(BASE_DIR, "bhavcopy_data", "top_gainers_2026-08-06.csv"),
-    os.path.join(BASE_DIR, "bhavcopy_data", "top_losers_2026-08-06.csv"),
-]
 
 
-def load_all_days(csv_paths: list[str] | None = None) -> dict:
-    """
-    Loads the hardcoded CSV files and returns a dict with one entry per file.
-    You can keep 2, 3, or 4 files by editing CSV_PATHS above.
-    Returns a dict: {filename_without_ext: DataFrame}
-    """
-    files_to_load = CSV_PATHS if csv_paths is None else csv_paths
-    if not isinstance(files_to_load, list):
-        files_to_load = list(files_to_load)
-
-    days = {}
-    for csv_path in files_to_load:
-        if not os.path.isfile(csv_path):
-            raise FileNotFoundError(f"File not found: {csv_path}")
-
-        day_label = os.path.splitext(os.path.basename(csv_path))[0]
-        df = pd.read_csv(csv_path)
-        df.columns = [c.strip().upper() for c in df.columns]
-
-        required = {"SYMBOL", "PCT_CHANGE"}
-        if not required.issubset(df.columns):
-            raise ValueError(
-                f"{csv_path} is missing required columns. Found: {list(df.columns)}. "
-                f"Need at least: {required}"
-            )
-
-        days[day_label] = df
-        print(f"Loaded {day_label}: {len(df)} stocks")
-
-    return days
+def discover_default_files(base_dir: str | None = None) -> tuple[str, str]:
+    """Pick the two latest full_pct_change CSV files from bhavcopy_data."""
+    data_dir = os.path.join(base_dir or BASE_DIR, "bhavcopy_data")
+    files = sorted(glob.glob(os.path.join(data_dir, "full_pct_change_*.csv")))
+    if len(files) < 2:
+        raise FileNotFoundError(
+            f"Expected at least two daily files in {data_dir}, found {len(files)}"
+        )
+    return files[-2], files[-1]
 
 
-def build_pct_change_matrix(days: dict) -> pd.DataFrame:
-    """
-    Builds a wide table: rows = SYMBOL, columns = each day's PCT_CHANGE.
-    Missing values mean that stock wasn't in that day's file
-    (e.g. didn't trade, got delisted, or is a new IPO).
-    """
-    day_labels = list(days.keys())
-    merged = None
+def load_pct_change_file(csv_path: str) -> pd.DataFrame:
+    """Load a daily percent-change export and keep only SYMBOL and PCT_CHANGE."""
+    if not os.path.isfile(csv_path):
+        raise FileNotFoundError(f"File not found: {csv_path}")
 
-    for label, df in days.items():
-        sub = df[["SYMBOL", "PCT_CHANGE"]].rename(columns={"PCT_CHANGE": label})
-        merged = sub if merged is None else merged.merge(sub, on="SYMBOL", how="outer")
+    df = pd.read_csv(csv_path)
+    df.columns = [c.strip().upper() for c in df.columns]
 
-    return merged, day_labels
+    if "SYMBOL" not in df.columns or "PCT_CHANGE" not in df.columns:
+        raise ValueError(
+            f"{csv_path} is missing required columns. Found: {list(df.columns)}"
+        )
 
-
-def find_consecutive_gainers(matrix: pd.DataFrame, day_labels: list) -> pd.DataFrame:
-    """
-    Finds stocks with a positive PCT_CHANGE on EVERY single day in the
-    provided range (i.e. present and gaining in day1 AND day2 AND day3...).
-    """
-    condition = pd.Series([True] * len(matrix))
-    for day in day_labels:
-        condition &= matrix[day].notna() & (matrix[day] > 0)
-
-    result = matrix[condition].copy()
-    result["TOTAL_STREAK_DAYS"] = len(day_labels)
-    result["AVG_DAILY_PCT_CHANGE"] = result[day_labels].mean(axis=1).round(2)
-    return result.sort_values("AVG_DAILY_PCT_CHANGE", ascending=False)
+    return df[["SYMBOL", "PCT_CHANGE"]].copy()
 
 
-def compute_streaks(matrix: pd.DataFrame, day_labels: list) -> pd.DataFrame:
-    """
-    For every stock, computes the CURRENT consecutive up-day streak,
-    counting backwards from the most recent day. This catches stocks
-    that are currently on a hot streak even if they had a down day earlier
-    in the dataset.
-    """
-    streaks = []
-    for _, row in matrix.iterrows():
-        streak = 0
-        for day in reversed(day_labels):  # walk backwards from most recent
-            val = row[day]
-            if pd.notna(val) and val > 0:
-                streak += 1
-            else:
-                break
-        streaks.append(streak)
+def compare_two_days(day1_path: str, day2_path: str) -> pd.DataFrame:
+    """Compare two daily PCT_CHANGE files and return a side-by-side summary."""
+    day1_df = load_pct_change_file(day1_path)
+    day2_df = load_pct_change_file(day2_path)
 
-    matrix = matrix.copy()
-    matrix["CURRENT_UP_STREAK"] = streaks
-    return matrix.sort_values("CURRENT_UP_STREAK", ascending=False)
+    day1_label = os.path.splitext(os.path.basename(day1_path))[0]
+    day2_label = os.path.splitext(os.path.basename(day2_path))[0]
+
+    merged = day1_df.rename(columns={"PCT_CHANGE": day1_label}).merge(
+        day2_df.rename(columns={"PCT_CHANGE": day2_label}),
+        on="SYMBOL",
+        how="outer",
+    )
+    merged = merged.sort_values("SYMBOL").reset_index(drop=True)
+
+    merged["DAY1_PCT_CHANGE"] = merged[day1_label]
+    merged["DAY2_PCT_CHANGE"] = merged[day2_label]
+    merged = merged.drop(columns=[day1_label, day2_label])
+
+    merged["DELTA_PCT_CHANGE"] = (
+        merged["DAY2_PCT_CHANGE"] - merged["DAY1_PCT_CHANGE"]
+    )
+
+    def classify_trend(row: pd.Series) -> str:
+        day1 = row["DAY1_PCT_CHANGE"]
+        day2 = row["DAY2_PCT_CHANGE"]
+
+        if pd.isna(day1) and pd.notna(day2):
+            return "added"
+        if pd.notna(day1) and pd.isna(day2):
+            return "removed"
+        if pd.isna(day1) or pd.isna(day2):
+            return "unknown"
+
+        delta = row["DELTA_PCT_CHANGE"]
+        if delta > 0:
+            return "up"
+        if delta < 0:
+            return "down"
+        return "flat"
+
+    merged["TREND"] = merged.apply(classify_trend, axis=1)
+
+    return merged[[
+        "SYMBOL",
+        "DAY1_PCT_CHANGE",
+        "DAY2_PCT_CHANGE",
+        "DELTA_PCT_CHANGE",
+        "TREND",
+    ]]
 
 
-def main():
-    days = load_all_days()
-    matrix, day_labels = build_pct_change_matrix(days)
+def main() -> None:
+    import sys
 
-    print(f"\nComparing {len(day_labels)} days: {day_labels}")
-
-    # 1. Stocks that gained on EVERY single day provided
-    consecutive_gainers = find_consecutive_gainers(matrix, day_labels)
-    consecutive_gainers.to_csv("consecutive_gainers.csv", index=False)
-
-    print(f"\n=== Stocks that gained on ALL {len(day_labels)} days ===")
-    if consecutive_gainers.empty:
-        print("None found — no stock gained on every single day provided.")
+    if len(sys.argv) == 3:
+        day1_path = sys.argv[1]
+        day2_path = sys.argv[2]
     else:
-        print(consecutive_gainers.to_string(index=False))
-    print("Saved -> consecutive_gainers.csv")
+        day1_path, day2_path = discover_default_files()
 
-    # 2. Current up-streak for every stock (more useful as days grow)
-    streak_df = compute_streaks(matrix, day_labels)
-    streak_df.to_csv("streak_summary.csv", index=False)
+    comparison = compare_two_days(day1_path, day2_path)
+    output_path = os.path.join(BASE_DIR, "two_day_comparison.csv")
+    comparison.to_csv(output_path, index=False)
 
-    print(f"\n=== Top 20 stocks by current consecutive up-streak ===")
-    print(streak_df.head(20).to_string(index=False))
-    print("Saved -> streak_summary.csv")
+    print(f"Comparing {os.path.basename(day1_path)} vs {os.path.basename(day2_path)}")
+    print(comparison.head(20).to_string(index=False))
+    print(f"Saved -> {output_path}")
 
 
 if __name__ == "__main__":
