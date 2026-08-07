@@ -48,8 +48,8 @@ def load_pct_change_file(csv_path: str) -> pd.DataFrame:
     return df[["SYMBOL", "PCT_CHANGE"]].copy()
 
 
-def compare_two_days(day1_path: str, day2_path: str) -> pd.DataFrame:
-    """Compare two daily PCT_CHANGE files and return a side-by-side summary."""
+def compare_two_days(day1_path: str, day2_path: str, threshold: float = 1.0) -> dict[str, pd.DataFrame]:
+    """Compare two daily PCT_CHANGE files and return threshold-based groupings."""
     day1_df = load_pct_change_file(day1_path)
     day2_df = load_pct_change_file(day2_path)
 
@@ -71,33 +71,54 @@ def compare_two_days(day1_path: str, day2_path: str) -> pd.DataFrame:
         merged["DAY2_PCT_CHANGE"] - merged["DAY1_PCT_CHANGE"]
     )
 
-    def classify_trend(row: pd.Series) -> str:
-        day1 = row["DAY1_PCT_CHANGE"]
-        day2 = row["DAY2_PCT_CHANGE"]
+    common_above_threshold = merged[
+        (merged["DAY1_PCT_CHANGE"].notna())
+        & (merged["DAY2_PCT_CHANGE"].notna())
+        & (merged["DAY1_PCT_CHANGE"] > threshold)
+        & (merged["DAY2_PCT_CHANGE"] > threshold)
+    ].copy()
 
-        if pd.isna(day1) and pd.notna(day2):
-            return "added"
-        if pd.notna(day1) and pd.isna(day2):
-            return "removed"
-        if pd.isna(day1) or pd.isna(day2):
-            return "unknown"
+    day1_only_above_threshold = merged[
+        (merged["DAY1_PCT_CHANGE"].notna())
+        & (merged["DAY2_PCT_CHANGE"].isna() | (merged["DAY2_PCT_CHANGE"] <= threshold))
+        & (merged["DAY1_PCT_CHANGE"] > threshold)
+    ].copy()
 
-        delta = row["DELTA_PCT_CHANGE"]
-        if delta > 0:
-            return "up"
-        if delta < 0:
-            return "down"
-        return "flat"
+    day2_new_above_threshold = merged[
+        (merged["DAY2_PCT_CHANGE"].notna())
+        & (merged["DAY1_PCT_CHANGE"].isna())
+        & (merged["DAY2_PCT_CHANGE"] > threshold)
+    ].copy()
 
-    merged["TREND"] = merged.apply(classify_trend, axis=1)
+    for df in [common_above_threshold, day1_only_above_threshold, day2_new_above_threshold]:
+        if not df.empty:
+            df["TREND"] = df["DAY2_PCT_CHANGE"] - df["DAY1_PCT_CHANGE"]
+            df["TREND_LABEL"] = df["TREND"].apply(lambda v: "up" if v > 0 else "down" if v < 0 else "flat")
+            df.reset_index(drop=True, inplace=True)
 
-    return merged[[
-        "SYMBOL",
-        "DAY1_PCT_CHANGE",
-        "DAY2_PCT_CHANGE",
-        "DELTA_PCT_CHANGE",
-        "TREND",
-    ]]
+    return {
+        "common_above_threshold": common_above_threshold[[
+            "SYMBOL",
+            "DAY1_PCT_CHANGE",
+            "DAY2_PCT_CHANGE",
+            "DELTA_PCT_CHANGE",
+            "TREND_LABEL",
+        ]].rename(columns={"TREND_LABEL": "TREND"}) if not common_above_threshold.empty else common_above_threshold,
+        "day1_only_above_threshold": day1_only_above_threshold[[
+            "SYMBOL",
+            "DAY1_PCT_CHANGE",
+            "DAY2_PCT_CHANGE",
+            "DELTA_PCT_CHANGE",
+            "TREND_LABEL",
+        ]].rename(columns={"TREND_LABEL": "TREND"}) if not day1_only_above_threshold.empty else day1_only_above_threshold,
+        "day2_new_above_threshold": day2_new_above_threshold[[
+            "SYMBOL",
+            "DAY1_PCT_CHANGE",
+            "DAY2_PCT_CHANGE",
+            "DELTA_PCT_CHANGE",
+            "TREND_LABEL",
+        ]].rename(columns={"TREND_LABEL": "TREND"}) if not day2_new_above_threshold.empty else day2_new_above_threshold,
+    }
 
 
 def main() -> None:
@@ -109,13 +130,28 @@ def main() -> None:
     else:
         day1_path, day2_path = discover_default_files()
 
-    comparison = compare_two_days(day1_path, day2_path)
-    output_path = os.path.join(BASE_DIR, "two_day_comparison.csv")
-    comparison.to_csv(output_path, index=False)
+    grouped = compare_two_days(day1_path, day2_path)
 
     print(f"Comparing {os.path.basename(day1_path)} vs {os.path.basename(day2_path)}")
-    print(comparison.head(20).to_string(index=False))
-    print(f"Saved -> {output_path}")
+    print(f"Threshold: > 1%")
+
+    for label, df in grouped.items():
+        print(f"\n=== {label} ===")
+        if df.empty:
+            print("No stocks found")
+        else:
+            print(df.head(20).to_string(index=False))
+
+    with pd.ExcelWriter(os.path.join(BASE_DIR, "two_day_comparison.xlsx")) as writer:
+        for label, df in grouped.items():
+            df.to_excel(writer, sheet_name=label[:31], index=False)
+
+    for label, df in grouped.items():
+        output_path = os.path.join(BASE_DIR, f"{label}.csv")
+        df.to_csv(output_path, index=False)
+        print(f"Saved -> {output_path}")
+
+    print(f"Saved -> {os.path.join(BASE_DIR, 'two_day_comparison.xlsx')}")
 
 
 if __name__ == "__main__":
